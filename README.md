@@ -158,3 +158,28 @@ If you would like to use cuVSLAM in a ROS2 environment, please refer to the foll
 
 ## License
 This project is licensed under a non-commercial NVIDIA license, for details refer to the [LICENCE](LICENSE) file.
+
+
+# ROS2 Wrapper
+
+## Installation
+
+1. Build Docker
+    ```bash
+    docker build -f Dockerfile_ros2 . --network host --tag pycuvslam-ros2
+    ```
+
+2. Run Container
+    ```bash
+    ./run_docker_ros2.sh
+    ```
+
+3. Setup PyCuVSLAM and Build ros2_ws
+    ```bash
+    ./setup_pycuvslam.sh
+    ```
+
+4. Run ROS2 node
+    ```bash
+    ros2 run pycuvslam_ros2 main_node
+    ```

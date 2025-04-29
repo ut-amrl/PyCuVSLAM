@@ -1,0 +1,46 @@
+FROM nvcr.io/nvidia/cuda:12.6.1-runtime-ubuntu22.04@sha256:aa0da342b530a7dd2630b17721ee907fc9210b4e159d67392c4c373bef642483
+
+# Set environment variables for non-interactive installs
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Add ROS 2 apt repository
+RUN apt-get update && apt-get install -y \
+    software-properties-common \
+    curl \
+    gnupg \
+    && curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu jammy main" > /etc/apt/sources.list.d/ros2.list \
+    && apt-get update
+
+# Install ROS 2 Humble desktop and development tools
+RUN apt-get install -y \
+    ros-humble-desktop \
+    ros-dev-tools \
+    python3-colcon-common-extensions \
+    python3-rosdep \
+    && apt-get clean
+
+# Initialize rosdep
+RUN rosdep init && rosdep update
+
+# Install existing dependencies from your Dockerfile
+RUN apt-get install -y --no-install-recommends --allow-change-held-packages \
+    libgtk-3-dev \
+    libpython3.10 \
+    libxkbcommon-x11-0 \
+    python3-pip \
+    unzip \
+    vulkan-tools \
+    mesa-vulkan-drivers \
+    wget \
+    && apt-get clean
+
+# Upgrade pip
+RUN pip3 install --upgrade pip
+
+# Source ROS 2 environment in the container
+RUN echo "source /opt/ros/humble/setup.bash" >> /root/.bashrc
+RUN echo "if [ -f /pycuvslam/ros2_ws/install/setup.bash ]; then source /pycuvslam/ros2_ws/install/setup.bash; fi" >> /root/.bashrc
+
+# Set working directory
+WORKDIR /pycuvslam
