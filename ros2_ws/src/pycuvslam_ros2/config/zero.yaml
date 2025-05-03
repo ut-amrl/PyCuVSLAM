@@ -1,0 +1,14 @@
+# camera configuration
+image_size: [1024, 576]
+
+fx: 388.020342571331
+fy: 387.60319154823264
+cx: 512.4622542025163
+cy: 283.52796495103775
+
+distortion_model: brown
+distortion_coefficients: [-0.19471045489976363, 0.0355134041319126, 0.0, 0.0, -0.0026537646171752253]
+
+# robot configuration
+wheel_radius: 0.065
+wheel_distance: 0.20
