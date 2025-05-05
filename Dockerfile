@@ -8,7 +8,9 @@ RUN apt-get update \
         python3-pip \
         unzip \
         vulkan-tools \
+        mesa-vulkan-drivers \
         wget \
+        ffmpeg \
     && apt-get clean
 
 RUN pip3 install --upgrade pip

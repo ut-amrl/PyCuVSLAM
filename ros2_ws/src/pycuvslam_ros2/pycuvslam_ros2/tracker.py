@@ -33,10 +33,22 @@ class VisualWheelOdometry:
         self.last_ts = 0
         self.trajectory = []
 
-    def update_wheel(self, ts, rpm_left, rpm_right):
-        self.wheel_odometry.update(ts, rpm_left, rpm_right)
+    @property
+    def last_wheel_ts(self):
+        if len(self.wheel_odometry.timestamps) == 0:
+            return 0.0
+        return self.wheel_odometry.timestamps[-1]
+
+    def update_wheel(self, ts, omega_left, omega_right):
+        logger.debug(f"t: {ts} - Wheel angular vel: {omega_left}, {omega_right}")
+        self.wheel_odometry.update(ts, omega_left, omega_right)
 
     def update_frame(self, ts, image):
+        if ts < self.last_wheel_ts:
+            logger.warning(
+                f"{ts} is earlier than the last wheel odometry ts {self.last_wheel_ts}"
+            )
+
         pose = self.tracker.track(ts, image)
         if pose is None:
             return self.trajectory[-1] if len(self.trajectory) > 0 else None
@@ -101,7 +113,7 @@ class PyCuVSLAM_MonoTracker:
         cfg = cuvslam.TrackerConfig()
         cfg.odometry_mode = cuvslam.TrackerOdometryMode.Mono
         cfg.async_sba = False
-        cfg.enable_observations_export = True
+        cfg.enable_observations_export = False
 
         # get camera rig
         cam = self.get_camera(config_path)
@@ -133,6 +145,10 @@ class PyCuVSLAM_MonoTracker:
         return cam
 
     def track(self, ts, image):
+        if np.mean(image) < 10 or np.mean(image) > 235:
+            logger.warning("Image too dark or bright, skipping...")
+            return None
+
         result = self.pycuvslam_tracker.track(int(ts * 1e9), [image])
 
         pose = None
@@ -144,16 +160,6 @@ class PyCuVSLAM_MonoTracker:
         self.trajectory.append(pose)
         self.frame_id += 1
         return pose
-
-
-class EMA:
-    def __init__(self, alpha):
-        self.alpha = alpha
-        self.x = None
-
-    def __call__(self, z):
-        self.x = z if self.x is None else self.alpha * z + (1 - self.alpha) * self.x
-        return self.x
 
 
 def to_SE2(x, y, th):
@@ -176,26 +182,20 @@ class WheelOdometry:
         self.timestamps = []
         self.poses = []
 
-    def update(self, ts, rpm_left, rpm_right):
-        logger.debug(f"t: {ts} - Wheel RPM: {rpm_left}, {rpm_right}")
+    def update(self, ts, omega_left, omega_right):
         if len(self.timestamps) == 0:
             self.timestamps.append(ts)
             self.poses.append(np.zeros(3))
             return
 
         dt = ts - self.timestamps[-1]
-        logger.debug(f"t: {ts} - dt: {dt}")
         if dt <= 0:
             logger.warning("Non-positive time step, skipping update.")
             return
 
-        # Convert RPM to radians per second
-        w_left = rpm_left * (2 * np.pi / 60)
-        w_right = rpm_right * (2 * np.pi / 60)
-
         # Calculate the linear and angular velocities
-        v = 0.5 * self.R * (w_left + w_right)
-        w = self.R * (w_right - w_left) / self.L
+        v = 0.5 * self.R * (omega_left + omega_right)
+        w = self.R * (omega_right - omega_left) / self.L
 
         # Update the pose
         x, y, theta = self.poses[-1]
@@ -206,7 +206,7 @@ class WheelOdometry:
 
         self.timestamps.append(ts)
         self.poses.append(np.array([x, y, theta]))
-        logger.debug(f"Pose: {self.poses[-1]}")
+        logger.debug(f"Wheel Odometry Pose: {self.poses[-1]}")
 
     def _interp_pose(self, t):
         if t < self.timestamps[0] or t > self.timestamps[-1]:
@@ -252,6 +252,7 @@ class WheelOdometry:
 if __name__ == "__main__":
     import os
     import time
+    import random
     import argparse
 
     import cv2
@@ -260,16 +261,17 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--ride_path",
+        "--ride_root",
         type=str,
-        default="frodobots8k/output_rides_30/ride_73849_c8033c_20240801164812",
+        default="frodobots8k/output_rides_30",
     )
     parser.add_argument(
         "--config_path", type=str, default="ros2_ws/src/pycuvslam_ros2/config/zero.yaml"
     )
     args = parser.parse_args()
 
-    ride_path = Path(args.ride_path)
+    ride_root = Path(args.ride_root)
+    ride_path = random.choice([d for d in ride_root.iterdir() if d.is_dir()])
 
     # load recording
     cam_path = ride_path / "front_camera.mp4"
@@ -286,6 +288,8 @@ if __name__ == "__main__":
     ctrl_timestamps = ctrl_path[:, 6]
     ctrl_rpm_left = (ctrl_path[:, 2] + ctrl_path[:, 4]) / 2
     ctrl_rpm_right = (ctrl_path[:, 3] + ctrl_path[:, 5]) / 2
+    ctrl_omega_left = ctrl_rpm_left * 2 * np.pi / 60
+    ctrl_omega_right = ctrl_rpm_right * 2 * np.pi / 60
 
     def color_from_id(identifier):
         return [
@@ -391,8 +395,8 @@ if __name__ == "__main__":
             # update wheel odometry
             vwo.update_wheel(
                 ctrl_timestamps[ctrl_idx],
-                ctrl_rpm_left[ctrl_idx],
-                ctrl_rpm_right[ctrl_idx],
+                ctrl_omega_left[ctrl_idx],
+                ctrl_omega_right[ctrl_idx],
             )
             last_ctrl_ts = ctrl_timestamps[ctrl_idx]
             ctrl_idx += 1
@@ -402,14 +406,11 @@ if __name__ == "__main__":
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         image = frame.copy()
 
-        # logger.debug(f"t: {ts} - Image shape: {image.shape}")
-
         # Track frame
         pose = vwo.update_frame(ts, image)
         logger.debug(f"t: {ts} - Pose: {pose}")
         if pose is None:
             continue
-
 
         # Log pose to Rerun
         traj = [np.concatenate((xyr[:2], [0])) for xyr in vwo.trajectory]
@@ -425,16 +426,16 @@ if __name__ == "__main__":
             ),
         )
 
-        current_observations_main_cam = (
-            vwo.tracker.pycuvslam_tracker.get_last_observations(0)
-        )
-        points = np.array([[obs.u, obs.v] for obs in current_observations_main_cam])
-        colors = np.array(
-            [color_from_id(obs.id) for obs in current_observations_main_cam]
-        )
+        # current_observations_main_cam = (
+        #     vwo.tracker.pycuvslam_tracker.get_last_observations(0)
+        # )
+        # points = np.array([[obs.u, obs.v] for obs in current_observations_main_cam])
+        # colors = np.array(
+        #     [color_from_id(obs.id) for obs in current_observations_main_cam]
+        # )
         rr.log(
             "world/camera_0/observations",
-            rr.Points2D(positions=points, colors=colors, radii=5.0),
+            # rr.Points2D(positions=points, colors=colors, radii=5.0),
             rr.Image(image).compress(jpeg_quality=80),
         )
 
